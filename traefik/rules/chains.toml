@@ -1,0 +1,8 @@
+[http.middlewares]
+  [http.middlewares.chain-no-auth]
+    [http.middlewares.chain-no-auth.chain]
+      middlewares = [ "rate-limit", "secure-headers"]
+
+  [http.middlewares.chain-authelia]
+    [http.middlewares.chain-authelia.chain]
+      middlewares = [ "rate-limit", "secure-headers", "authelia"]

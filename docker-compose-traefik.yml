@@ -1,0 +1,207 @@
+version: "3.7"
+
+networks:
+  default:
+    driver: bridge
+  traefik:
+    name: traefik
+    ipam:
+      config:
+        - subnet: 172.18.0.0/24
+  socket-proxy:
+    name: socket-proxy
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.18.1.0/24
+  socket-proxy_certs-dumper:
+    name: socket-proxy_certs-dumper
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.18.2.0/24
+
+secrets:
+  my-email:
+    file: $DOCKER_DIR/secrets/my-email
+  duckdns-token:
+    file: $DOCKER_DIR/secrets/duckdns-token
+  authelia-jwt-secret:
+    file: $DOCKER_DIR/secrets/authelia-jwt-secret
+  authelia-session-secret:
+    file: $DOCKER_DIR/secrets/authelia-session-secret
+#  authelia-session-redis-password
+#    file: $DOCKER_DIR/secrets/authelia-session-redis-password
+#  authelia-storage-mysql-password:
+#    file: $DOCKER_DIR/secrets/authelia-storage-mysql-password
+  authelia-notifier-smtp-password:
+    file: $DOCKER_DIR/secrets/authelia-notifier-smtp-password
+
+services:
+  traefik:
+    container_name: traefik
+    image: traefik:picodon # v2.3.x
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - --global.checknewversion=true
+      - --global.sendanonymoususage=false
+      - --entrypoints.http.address=:80
+      - --entrypoints.https.address=:443
+      - --entrypoints.traefik.address=:8080
+      - --entrypoints.https.http.tls.options=default
+      - --entrypoints.https.http.tls.certresolver=duckdns
+      - --entrypoints.https.http.tls.domains[0].main=$DOMAIN_NAME
+      - --entrypoints.https.http.tls.domains[0].sans=*.$DOMAIN_NAME
+#      - --certificatesresolvers.duckdns.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory
+      - --certificatesresolvers.duckdns.acme.email=$MY_EMAIL
+      - --certificatesresolvers.duckdns.acme.storage=/acme.json
+      - --certificatesresolvers.duckdns.acme.dnschallenge.provider=duckdns
+      - --api=true
+#      - --api.insecure=true
+      - --api.dashboard=true
+      - --serverstransport.insecureskipverify=true
+      - --providers.docker=true
+#      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      - --providers.docker.endpoint=tcp://socket-proxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=traefik
+      - --providers.docker.swarmmode=false
+      - --providers.file.directory=/rules
+      - --providers.file.watch=true
+      - --log=true
+      - --log.level=INFO
+      - --accesslog=true
+      - --accesslog.filepath=/traefik.log
+      - --accesslog.bufferingsize=100
+      - --accesslog.filters.statuscodes=400-499
+    networks:
+      - traefik
+      - socket-proxy
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - $DOCKER_DIR/traefik/acme/acme.json:/acme.json
+      - $DOCKER_DIR/traefik/traefik.log:/traefik.log
+      - $DOCKER_DIR/traefik/rules:/rules:ro
+    secrets:
+      - duckdns-token
+    environment:
+      - TZ=$TZ
+      - DUCKDNS_TOKEN_FILE=/run/secrets/duckdns-token
+    labels:
+      - "traefik.enable=true"
+      # Redirect HTTP to HTTPS
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=http"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      # Dashboard
+      - "traefik.http.routers.traefik.entrypoints=https"
+      - "traefik.http.routers.traefik.rule=host(`traefik.$DOMAIN_NAME`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))"
+      - "traefik.http.routers.traefik.service=api@internal"
+      # Security
+      - "traefik.http.routers.traefik.middlewares=chain-authelia@file"
+
+  socket-proxy:
+    container_name: socket-proxy
+    image: fluencelabs/docker-socket-proxy
+    restart: unless-stopped
+#    privileged: true   # SELinux/Apparmor 
+    networks:
+      - socket-proxy
+#    ports:
+#      - "2375:2375"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - LOG_LEVEL=info
+      - CONTAINERS=1    # traefik
+      
+  socket-proxy_certs-dumper:
+    container_name: socket-proxy_certs-dumper
+    image: fluencelabs/docker-socket-proxy
+    restart: unless-stopped
+#    privileged: true   # SELinux/Apparmor 
+    networks:
+      - socket-proxy_certs-dumper
+#    ports:
+#      - "2375:2375"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - LOG_LEVEL=info
+      - POST=1
+      - CONTAINERS=1
+      - ALLOW_RESTARTS=1 # traefik-certs-dumper
+
+  certs-dumper:
+    container_name: certs-dumper
+    image: humenius/traefik-certs-dumper
+    restart: unless-stopped
+    depends_on:
+      - socket-proxy_certs-dumper
+    security_opt:
+      - no-new-privileges:true
+    command: --restart-containers change-me
+#    network_mode: "none"
+    networks:
+      - socket-proxy_certs-dumper
+    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+      - $DOCKER_DIR/traefik/acme:/traefik:ro
+      - $DOCKER_DIR/certs:/output
+    environment:
+      - DOMAIN=$DOMAIN_NAME
+      - OVERRIDE_UID=0
+      - OVERRIDE_GID=$PGID
+      - DOCKER_HOST=tcp://socket-proxy_certs-dumper:2375
+
+  authelia:
+    container_name: authelia
+    image: authelia/authelia
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik
+#    ports:
+#      - "9091:9091"
+#    depends_on:
+#      - mariadb
+#      - redis
+    volumes:
+      - $DOCKER_DIR/authelia/config:/config
+    secrets:
+      - authelia-jwt-secret
+      - authelia-session-secret
+#      - authelia-session-redis-password
+#      - authelia-storage-mysql-password
+      - authelia-notifier-smtp-password
+    environment:
+      - TZ=$TZ
+      - AUTHELIA_JWT_SECRET_FILE=/run/secrets/authelia-jwt-secret
+      - AUTHELIA_SESSION_SECRET_FILE=/run/secrets/authelia-session-secret
+#      - AUTHELIA_SESSION_REDIS_PASSWORD_FILE=/run/secrets/authelia-session-redis-password
+#      - AUTHELIA_STORAGE_MYSQL_PASSWORD_FILE=/run/secrets/authelia-storage-mysql-password
+      - AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE=/run/secrets/authelia-notifier-smtp-password
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authelia.entrypoints=https"
+      - "traefik.http.routers.authelia.rule=host(`authelia.$DOMAIN_NAME`)"
+      - "traefik.http.routers.authelia.service=authelia"
+      - "traefik.http.services.authelia.loadbalancer.server.port=9091"
+      - "traefik.http.routers.authelia.middlewares=authelia-headers"
+#      - "traefik.http.middlewares.authelia-headers.headers.browserXssFilter=true"
+#      - "traefik.http.middlewares.authelia-headers.headers.customFrameOptionsValue=SAMEORIGIN"
+      - "traefik.http.middlewares.authelia-headers.headers.customResponseHeaders.Cache-Control=no-store"
+      - "traefik.http.middlewares.authelia-headers.headers.customResponseHeaders.Pragma=no-cache"
+      - "traefik.http.routers.authelia.middlewares=chain-authelia@file,authelia-headers"

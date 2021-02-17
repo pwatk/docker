@@ -1,0 +1,21 @@
+[http.middlewares]
+  [http.middlewares.secure-headers]
+    [http.middlewares.secure-headers.headers]
+      accessControlAllowMethods= ["GET", "OPTIONS", "PUT"]
+      accessControlMaxAge = 100
+      hostsProxyHeaders = ["X-Forwarded-Host"]
+      sslRedirect = true
+      stsSeconds = 31536000
+      stsIncludeSubdomains = true
+      stsPreload = true
+      forceSTSHeader = true
+#      frameDeny = true
+      customFrameOptionsValue = "SAMEORIGIN"
+      contentTypeNosniff = true 
+      browserXssFilter = true 
+      referrerPolicy = "same-origin" 
+#      contentSecurityPolicy = "frame-ancestors '*.example.com:*';object-src 'none';script-src 'none';"
+      featurePolicy = "camera 'none'; geolocation 'none'; microphone 'none'; payment 'none'; usb 'none'; vr 'none'; xr-spatial-tracking 'none'" 
+      [http.middlewares.secure-headers.headers.customResponseHeaders]
+        X-Robots-Tag = "none,noarchive,nosnippet,notranslate,noimageindex,"
+        server = ""
